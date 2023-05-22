@@ -1,0 +1,7 @@
+#include <unistd.h>
+#include <stdio.h>
+
+int main(void)
+{
+	printf("UID = %u(0x%X) GID = %u(0x%X)\n", getuid(), getuid(), getgid(), getgid()); 
+}

@@ -1,0 +1,239 @@
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <dirent.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <errno.h>
+#include <pwd.h>
+#include <grp.h>
+#include <string.h>
+#include <fcntl.h>
+#include <time.h>
+#include <stdbool.h>
+
+enum {
+    DARK = ' ',
+    LIGHT = 1
+};
+
+enum  {
+    FG_BLACK = 30,
+    FG_RED = 31,
+    FG_GREEN,
+    FG_YELLOW,
+    FG_BLUE,
+    FG_MAGENTA,
+    FG_CYAN,
+    FG_WHITE
+};
+
+enum  {
+    BG_BLACK = 40,
+    BG_RED = 41,
+    BG_GREEN,
+    BG_YELLOW,
+    BG_BLUE,
+    BG_MAGENTA,
+    BG_CYAN,
+    BG_WHITE
+};
+
+static int resetColor()
+{
+    printf("\033[0m");
+    fflush(stdout);
+}
+
+static int setColor(int lightness, int color)
+{
+    printf("\033[%d;%dm", lightness, color);
+    fflush(stdout);
+}
+
+const char* get_type(unsigned char type)
+{
+    switch(type)
+    {
+        case DT_BLK:
+            return "   block device   ";
+        case DT_CHR:
+            return " character device ";
+        case DT_DIR:
+            return "     directory    ";
+        case DT_FIFO:
+            return "named pipe  (FIFO)";
+        case DT_LNK:
+            return "  symbolic  link  ";
+        case DT_REG:
+            return "  regular  file   ";
+        case DT_SOCK:
+            return "UNIX domain socket";
+        default:
+            return "      unknown     ";
+    }
+}
+
+bool is_exec(const struct stat* st)
+{
+    if( (st->st_mode & S_IXUSR) ||
+        (st->st_mode & S_IXGRP) ||
+        (st->st_mode & S_IXOTH))
+        return true;
+    return false;
+}
+
+void set_stat_type_color(const struct stat* st)
+{
+    switch(st->st_mode & S_IFMT)
+    {
+        case S_IFBLK:
+        case S_IFCHR:
+            setColor(DARK, BG_BLACK);
+            setColor(LIGHT, FG_YELLOW);
+            return;
+        case S_IFDIR:
+            setColor(LIGHT, FG_BLUE);
+            return;
+        case S_IFIFO:
+            setColor(DARK, BG_BLACK);
+            setColor(DARK, FG_YELLOW);
+            return;
+        case S_IFLNK:
+            setColor(LIGHT, FG_CYAN);
+            return;
+        case S_IFREG:
+            if(is_exec(st))
+                setColor(LIGHT, FG_GREEN);
+            return;
+        case S_IFSOCK:
+            setColor(LIGHT, FG_MAGENTA);
+            return;
+        default:
+            return;
+    }
+}
+
+void print_symlink(const struct stat* st, const char* lnk)
+{
+    int bufsiz = st->st_size + 1;
+
+    if(st->st_size == 0)
+        bufsiz = PATH_MAX;
+
+    char* buf = (char*)calloc(bufsiz, sizeof(char));
+
+    int num = readlink(lnk, buf, bufsiz);
+
+    fprintf(stdout, " -> ");
+
+    struct stat lnk_fl_st = {};
+
+    if(lstat(buf, &lnk_fl_st) >= 0)
+        set_stat_type_color(&lnk_fl_st);
+    else
+        printf("ERROR: link_name: \"%s\"\n", buf);
+
+    fprintf(stdout, "%s", buf);
+
+    resetColor();
+
+    free(buf);
+
+    return;
+}
+
+void print_rights(const struct stat* st)
+{
+    printf( (st->st_mode & S_IRUSR) ? "r" : "-");
+    printf( (st->st_mode & S_IWUSR) ? "w" : "-");
+    printf( (st->st_mode & S_IXUSR) ? "x" : "-");
+    printf( (st->st_mode & S_IRGRP) ? "r" : "-");
+    printf( (st->st_mode & S_IWGRP) ? "w" : "-");
+    printf( (st->st_mode & S_IXGRP) ? "x" : "-");
+    printf( (st->st_mode & S_IROTH) ? "r" : "-");
+    printf( (st->st_mode & S_IWOTH) ? "w" : "-");
+    printf( (st->st_mode & S_IXOTH) ? "x" : "-");
+}
+
+
+int main(int argc, char** argv)
+{
+    char* dirname = NULL;
+
+    if(argc == 1)
+        dirname = ".";
+    else if(argc == 2)
+        dirname = argv[1];
+    else
+    {
+        printf("Error: wrong input\n");
+        exit(EXIT_FAILURE);
+    }
+
+    struct stat st = {};
+    
+    if(lstat(dirname, &st) < 0)
+    {
+        fprintf(stderr, "Error ocurred while getting stats about \"%s\"",
+                        dirname);
+        perror("");
+        exit(EXIT_FAILURE);
+    }
+
+    if((st.st_mode & S_IFMT) != S_IFDIR)
+    {
+        fprintf(stderr, "Error: \"%s\" is not a directory\n", dirname);
+        exit(EXIT_FAILURE);
+    }
+
+    DIR* dir = opendir(dirname);
+
+    char full_filename[512] = {};
+    int offset = sprintf(full_filename, "%s/", dirname);
+
+    struct dirent* entry = NULL;
+    time_t time = 0; 
+
+    while((entry = readdir(dir)) != NULL)
+    {
+        int name_len = sprintf(full_filename + offset, "%s", entry->d_name);
+
+        if(lstat(full_filename, &st) < 0)
+        {
+            fprintf(stderr, "Error: cannot get stats of \"%s\"\n",
+                            entry->d_name);
+            continue;
+        }
+
+
+
+        fprintf(stdout, "[%s] ",
+                        get_type(entry->d_type));
+
+        print_rights(&st);
+        
+        fprintf(stdout, " %5d %11s %11s %8d %.24s ",
+                        st.st_nlink,
+                        getpwuid(st.st_uid) -> pw_name,
+                        getgrgid(st.st_gid) -> gr_name,
+                        st.st_size,
+                        ctime((time_t*)&st.st_mtim));
+
+        set_stat_type_color(&st);
+
+        fprintf(stdout, "%s", entry->d_name);
+
+        resetColor();
+
+        if(entry->d_type == DT_LNK)
+            print_symlink(&st, full_filename);
+
+
+        fprintf(stdout, "\n");
+        
+        memset(full_filename + offset, '\0', name_len);
+    }
+
+    return 0;
+}
